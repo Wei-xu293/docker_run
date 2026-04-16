@@ -2,7 +2,7 @@ name: Docker vs Native Memory Overhead
 
 on:
   push:
-    branches: [ main ]
+    branches: [  ]
   workflow_dispatch:
 
 jobs:

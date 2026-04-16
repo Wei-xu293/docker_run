@@ -75,27 +75,20 @@ jobs:
           cd scimark
           echo "=== Case 2: SciMark2 -large performance and memory ==="
           
-          # Native
-          /usr/bin/time -v java -jar target/scimark-*.jar -large 2>&1 | tee native_large.txt
+          # Native (use the executable jar, not javadoc)
+          /usr/bin/time -v java -jar target/scimark-2.3-SNAPSHOT.jar -large 2>&1 | tee native_large.txt
           native_score=$(grep "Composite Score" native_large.txt | awk '{print $3}')
           native_mem=$(grep "Maximum resident set size" native_large.txt | awk '{print $6}')
           echo "Native -large: Composite Score = $native_score, Peak RSS = $((native_mem / 1024)) MB"
           
           # Docker (no limit)
-          docker run --rm -v $PWD:/app -w /app adoptopenjdk/openjdk11:ubi java -jar /app/target/scimark-*.jar -large > docker_large.txt 2>&1 &
-          DOCKER_PID=$!
-          sleep 5
-          # Get container ID from background run (hack: we can run with --name)
-          docker run --name scimark_large --rm -v $PWD:/app -w /app adoptopenjdk/openjdk11:ubi java -jar /app/target/scimark-*.jar -large > docker_large_output.txt 2>&1 &
-          sleep 2
-          docker stats --no-stream scimark_large > docker_stats.txt 2>&1
-          docker_mem=$(grep -oP '\d+\.\d+MiB' docker_stats.txt | head -1 | sed 's/MiB//')
-          wait
+          docker run --rm -v $PWD:/app -w /app adoptopenjdk/openjdk11:ubi java -jar /app/target/scimark-2.3-SNAPSHOT.jar -large > docker_large_output.txt 2>&1
+          docker_mem=$(docker stats --no-stream --format "{{.MemUsage}}" $(docker ps -lq) 2>/dev/null | awk '{print $1}' | sed 's/MiB//')
           docker_score=$(grep "Composite Score" docker_large_output.txt | awk '{print $3}')
           echo "Docker -large: Composite Score = $docker_score, RSS = $docker_mem MB"
           
           echo "CASE2: native_score=$native_score, native_mem_mb=$((native_mem / 1024)), docker_score=$docker_score, docker_mem_mb=$docker_mem" >> ../results.txt
-
+        
       # ========== CASE 3: Memory limits and OOM Killer ==========
       - name: Case 3 - Memory limits (OOM test)
         run: |
@@ -103,7 +96,8 @@ jobs:
           echo "=== Case 3: OOM Killer with --memory=200m (large dataset) ==="
           # Run with 200MB limit, expecting OOM
           set +e  # allow failure
-          docker run --rm --memory=200m -v $PWD:/app -w /app adoptopenjdk/openjdk11:ubi java -jar /app/target/scimark-*.jar -large
+          # Case 3 - OOM
+          docker run --rm --memory=200m -v $PWD:/app -w /app adoptopenjdk/openjdk11:ubi java -jar /app/target/scimark-2.3-SNAPSHOT.jar -large
           exit_code=$?
           set -e
           if [ $exit_code -eq 137 ]; then
@@ -123,7 +117,7 @@ jobs:
           # Native instances
           pids=()
           for i in {1..3}; do
-            java -jar target/scimark-*.jar > native_$i.out 2>&1 &
+            java -jar target/scimark-2.3-SNAPSHOT.jar > native_$i.out 2>&1 &
             pids+=($!)
           done
           sleep 5
@@ -140,7 +134,7 @@ jobs:
           # Docker instances
           ids=()
           for i in {1..3}; do
-            id=$(docker run -d -v $PWD:/app -w /app adoptopenjdk/openjdk11:ubi java -jar /app/target/scimark-*.jar)
+            id=$(docker run -d -v $PWD:/app -w /app adoptopenjdk/openjdk11:ubi java -jar /app/target/scimark-2.3-SNAPSHOT.jar)
             ids+=($id)
           done
           sleep 5
