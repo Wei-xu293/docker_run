@@ -1,49 +1,33 @@
-name: Docker vs Native Memory Overhead
+name: Docker vs Native Memory
 
-on:
-  push:
-    branches: [ main ]
-  workflow_dispatch:
+on: [push, workflow_dispatch]
 
 jobs:
-  benchmark:
-    runs-on: ubuntu-latest   # 2-core, 7 GB RAM, Docker preinstalled
+  test:
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
-      # Build a simple memory eater (e.g., Python script)
-      - name: Create memory test script
+      - name: Create memtest.py
         run: |
           cat > memtest.py << 'EOF'
-          import sys, time, psutil
-          size_mb = int(sys.argv[1]) if len(sys.argv) > 1 else 100
-          # Allocate a large list
+          import sys, time, os
+          def get_rss_mb():
+              with open('/proc/self/statm') as f:
+                  resident_pages = int(f.readline().split()[1])
+                  page_size = os.sysconf('SC_PAGE_SIZE')
+                  return (resident_pages * page_size) / (1024 * 1024)
+          size_mb = int(sys.argv[1])
           data = [bytearray(1024*1024) for _ in range(size_mb)]
-          # Report RSS (resident memory) in MB
-          rss = psutil.Process().memory_info().rss / (1024*1024)
-          print(f"Native RSS: {rss:.2f} MB")
-          time.sleep(2)   # keep process alive for measurement
+          print(f"RSS: {get_rss_mb():.2f} MB")
+          time.sleep(2)
           EOF
 
-      # Native run
-      - name: Run native (baseline)
-        run: |
-          python3 memtest.py 150 &
-          PID=$!
-          sleep 1
-          cat /proc/$PID/status | grep VmRSS
-          kill $PID
+      - name: Native run
+        run: python3 memtest.py 150
 
-      # Docker run (without limits)
-      - name: Run Docker (no limit)
-        run: |
-          docker run --rm -v $PWD:/app -w /app python:3-slim python memtest.py 150 &
-          sleep 2
-          docker stats --no-stream
+      - name: Docker run (no limit)
+        run: docker run --rm -v $PWD:/app -w /app python:3-slim python /app/memtest.py 150
 
-      # Docker run with memory limit (cgroup)
-      - name: Run Docker with memory limit
-        run: |
-          docker run --rm --memory=200m -v $PWD:/app -w /app python:3-slim python memtest.py 300
-          # The container will exceed 200 MB → should be OOM killed
-          echo "Exit code: $?"
+      - name: Docker run with 200MB limit (allocating 300MB)
+        run: docker run --rm --memory=200m -v $PWD:/app -w /app python:3-slim python /app/memtest.py 300 || true
