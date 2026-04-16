@@ -20,7 +20,7 @@ jobs:
           java-version: '11'
 
       - name: Setup Maven
-        uses: stCarolas/setup-maven@v5
+        uses: stCarolas/setup-maven@latest
         with:
           maven-version: '3.9.6'
 
@@ -178,7 +178,7 @@ jobs:
 
       # ---------- Upload all results ----------
       - name: Upload experiment results
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@v7
         with:
           name: scimark-results
           path: |
