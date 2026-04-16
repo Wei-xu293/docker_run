@@ -60,7 +60,7 @@ jobs:
           echo "Native idle RSS: ${rss_native} KB ($((rss_native / 1024)) MB)"
           
           # Docker idle
-          docker run -d --name idle_container -v $PWD:/app -w /app openjdk:11-jre-slim java Idle
+          docker run -d --name idle_container -v $PWD:/app -w /app adoptopenjdk/openjdk11:ubi java Idle
           sleep 2
           rss_docker=$(docker stats --no-stream --format "{{.MemUsage}}" idle_container | awk '{print $1}' | sed 's/MiB//')
           docker rm -f idle_container
@@ -82,11 +82,11 @@ jobs:
           echo "Native -large: Composite Score = $native_score, Peak RSS = $((native_mem / 1024)) MB"
           
           # Docker (no limit)
-          docker run --rm -v $PWD:/app -w /app openjdk:11-jre-slim java -jar /app/target/scimark-*.jar -large > docker_large.txt 2>&1 &
+          docker run --rm -v $PWD:/app -w /app adoptopenjdk/openjdk11:ubi java -jar /app/target/scimark-*.jar -large > docker_large.txt 2>&1 &
           DOCKER_PID=$!
           sleep 5
           # Get container ID from background run (hack: we can run with --name)
-          docker run --name scimark_large --rm -v $PWD:/app -w /app openjdk:11-jre-slim java -jar /app/target/scimark-*.jar -large > docker_large_output.txt 2>&1 &
+          docker run --name scimark_large --rm -v $PWD:/app -w /app adoptopenjdk/openjdk11:ubi java -jar /app/target/scimark-*.jar -large > docker_large_output.txt 2>&1 &
           sleep 2
           docker stats --no-stream scimark_large > docker_stats.txt 2>&1
           docker_mem=$(grep -oP '\d+\.\d+MiB' docker_stats.txt | head -1 | sed 's/MiB//')
@@ -103,7 +103,7 @@ jobs:
           echo "=== Case 3: OOM Killer with --memory=200m (large dataset) ==="
           # Run with 200MB limit, expecting OOM
           set +e  # allow failure
-          docker run --rm --memory=200m -v $PWD:/app -w /app openjdk:11-jre-slim java -jar /app/target/scimark-*.jar -large
+          docker run --rm --memory=200m -v $PWD:/app -w /app adoptopenjdk/openjdk11:ubi java -jar /app/target/scimark-*.jar -large
           exit_code=$?
           set -e
           if [ $exit_code -eq 137 ]; then
@@ -140,7 +140,7 @@ jobs:
           # Docker instances
           ids=()
           for i in {1..3}; do
-            id=$(docker run -d -v $PWD:/app -w /app openjdk:11-jre-slim java -jar /app/target/scimark-*.jar)
+            id=$(docker run -d -v $PWD:/app -w /app adoptopenjdk/openjdk11:ubi java -jar /app/target/scimark-*.jar)
             ids+=($id)
           done
           sleep 5
