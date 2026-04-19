@@ -73,6 +73,8 @@ jobs:
             docker_mb=0
             docker_rss_kb=0
             docker_pss_mb="0.00"
+            docker_host_rss_kb=0
+            docker_host_pss_mb="0.00"
 
             helper_output=$(docker run --rm --privileged -v $PWD:/app -w /app "$IMAGE" sh -c '
               java Idle & pid=$!;
