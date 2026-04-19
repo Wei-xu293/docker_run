@@ -1,0 +1,88 @@
+name: SciMark2 - Case1 Simple Benchmark
+
+on:
+  workflow_dispatch:
+    inputs:
+      iterations:
+        description: 'Número de ejecuciones medidas por escenario'
+        required: false
+        default: '5'
+      sleep:
+        description: 'Segundos de espera antes de medir'
+        required: false
+        default: '2'
+      image:
+        description: 'Imagen Docker Java a usar'
+        required: false
+        default: 'eclipse-temurin:11-jdk-ubi9-minimal'
+
+jobs:
+  case1-simple:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+
+      - name: Setup Java
+        uses: actions/setup-java@v5
+        with:
+          distribution: 'temurin'
+          java-version: '11'
+
+      - name: Create tiny Idle program
+        run: |
+          cat > Idle.java <<'EOF'
+          public class Idle { public static void main(String[] args) throws InterruptedException { Thread.sleep(5000); } }
+          EOF
+          javac Idle.java
+
+      - name: Run quick Case1 iterations
+        env:
+          ITERATIONS: ${{ github.event.inputs.iterations }}
+          SLEEP: ${{ github.event.inputs.sleep }}
+          IMAGE: ${{ github.event.inputs.image }}
+        run: |
+          set -euo pipefail
+          ITER=${ITERATIONS:-5}
+          SLEEP=${SLEEP:-2}
+          IMAGE=${IMAGE:-eclipse-temurin:11-jdk-ubi9-minimal}
+          OUT=case1_simple_results.txt
+          echo "scenario,iter,timestamp,rss_kb,docker_mem_mb,docker_mem_raw,exit_code" > $OUT
+
+          for i in $(seq 1 $ITER); do
+            # Native
+            java Idle &
+            PID=$!
+            sleep $SLEEP
+            rss_kb=$(grep -i VmRSS /proc/$PID/status 2>/dev/null | awk '{print $2}' || echo 0)
+            kill $PID 2>/dev/null || true
+            wait $PID 2>/dev/null || true
+            echo "native,$i,$(date +%s),${rss_kb},,,0" >> $OUT
+
+            # Docker
+            cname="idle_${i}_$$"
+            docker run -d --name "$cname" -v $PWD:/app -w /app "$IMAGE" java Idle >/dev/null
+            sleep $SLEEP
+            docker_raw=$(docker stats --no-stream --format "{{.MemUsage}}" "$cname" 2>/dev/null || echo "")
+            # extract first token and normalise MiB/GiB to MB
+            token=$(echo "$docker_raw" | awk '{print $1}')
+            docker_mb=0
+            if echo "$token" | grep -q GiB; then
+              docker_mb=$(echo $token | sed 's/GiB//' | awk '{print $1 * 1024}')
+            elif echo "$token" | grep -q MiB; then
+              docker_mb=$(echo $token | sed 's/MiB//')
+            elif echo "$token" | grep -q KiB; then
+              docker_mb=$(awk "BEGIN{print $(echo $token | sed 's/KiB//')/1024}")
+            fi
+            exit_code=0
+            docker rm -f "$cname" >/dev/null 2>&1 || exit_code=$?
+            echo "docker,$i,$(date +%s),,${docker_mb},\"${docker_raw}\",${exit_code}" >> $OUT
+          done
+
+          echo "Results saved to $OUT"
+
+      - name: Upload results
+        uses: actions/upload-artifact@v7
+        with:
+          name: case1-simple-results
+          path: case1_simple_results.txt
