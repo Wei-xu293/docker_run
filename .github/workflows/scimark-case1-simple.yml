@@ -47,7 +47,7 @@ jobs:
           SLEEP=${SLEEP:-2}
           IMAGE=${IMAGE:-eclipse-temurin:11-jdk-ubi9-minimal}
           OUT=case1_simple_results.txt
-          echo "scenario,iter,timestamp,rss_kb,pss_mb,docker_rss_kb,docker_pss_mb,docker_host_rss_kb,docker_host_pss_mb,docker_mem_mb,docker_mem_raw,exit_code" > $OUT
+          echo "scenario,iter,timestamp,pss_mb,docker_pss_mb,docker_host_pss_mb,docker_mem_mb,docker_mem_raw,exit_code" > $OUT
 
           pss_from_smaps() {
             PID=$1
@@ -55,24 +55,21 @@ jobs:
           }
 
           for i in $(seq 1 $ITER); do
-            # Native
+            # Native: only collect PSS
             java Idle &
             PID=$!
             sleep $SLEEP
-            rss_kb=$(grep -i VmRSS /proc/$PID/status 2>/dev/null | awk '{print $2}' || echo 0)
             pss_native=$(pss_from_smaps $PID)
             kill $PID 2>/dev/null || true
             wait $PID 2>/dev/null || true
-            # Emit full 12-column CSV line: leave docker-related fields empty for native rows
-            echo "native,$i,$(date +%s),${rss_kb},${pss_native},,,,,,0" >> $OUT
+            # Emit CSV line with only PSS fields filled for native
+            printf "%s,%s,%s,%s,%s,%s,%s,%s,%s\n" "native" "$i" "$(date +%s)" "${pss_native}" "" "" "" "" "0" >> $OUT
 
             # Docker: start container detached with a name so we can inspect host PID/smaps
             cname="idle_${i}_$$"
             docker_raw=""
             docker_mb=0
-            docker_rss_kb=0
             docker_pss_mb="0.00"
-            docker_host_rss_kb=0
             docker_host_pss_mb="0.00"
 
             docker run -d --privileged --name "$cname" -v $PWD:/app -w /app "$IMAGE" sh -c 'java Idle & sleep 600' >/dev/null
@@ -81,9 +78,7 @@ jobs:
             # Attempt to find the host PID for the java process inside the container
             host_pid=$(docker top "$cname" -eo pid,cmd 2>/dev/null | awk '$2=="java" {p=$1} END{print p}' || true)
             if [ -n "$host_pid" ]; then
-              docker_host_rss_kb=$(grep -i VmRSS /proc/$host_pid/status 2>/dev/null | awk '{print $2}' || echo 0)
               docker_host_pss_mb=$(sudo awk '/Pss:/ {s+=$2} END {printf("%.2f", s/1024)}' /proc/$host_pid/smaps 2>/dev/null || echo "0.00")
-              docker_rss_kb=$docker_host_rss_kb
               docker_pss_mb=$docker_host_pss_mb
             fi
 
@@ -116,7 +111,7 @@ jobs:
             # Stop and remove the container now that we've captured host-side metrics
             exit_code=0
             docker rm -f "$cname" >/dev/null 2>&1 || exit_code=$?
-            echo "docker,$i,$(date +%s),,,${docker_rss_kb},${docker_pss_mb},${docker_host_rss_kb},${docker_host_pss_mb},${docker_mb},\"${docker_raw}\",${exit_code}" >> $OUT
+            printf "%s,%s,%s,%s,%s,%s,%s,%s,%s\n" "docker" "$i" "$(date +%s)" "" "${docker_pss_mb}" "${docker_host_pss_mb}" "${docker_mb}" "${docker_raw}" "${exit_code}" >> $OUT
           done
 
           echo "Results saved to $OUT"

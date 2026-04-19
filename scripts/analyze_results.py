@@ -20,8 +20,6 @@ def to_float(x):
         return None
 
 def paired_stats(rows):
-    native_pss = []
-    docker_pss = []
     # assume rows alternate native,docker pairs or are ordered; group by iter
     by_iter = {}
     for row in rows:
@@ -37,16 +35,16 @@ def paired_stats(rows):
             by_iter[it]['docker'] = val
 
     diffs = []
-    pairs = []
+    triplets = []
     for it, pair in sorted(by_iter.items(), key=lambda x:int(x[0])):
         n = pair.get('native')
         d = pair.get('docker')
         if n is None or d is None:
             continue
-        pairs.append((n,d))
+        triplets.append((int(it), n, d))
         diffs.append(d - n)
 
-    return pairs, diffs
+    return triplets, diffs
 
 def mean_ci_bootstrap(diffs, n_boot=10000, alpha=0.05):
     if not diffs:
@@ -66,23 +64,38 @@ def paired_t_stat(diffs):
     if n < 2:
         return None
     m = statistics.mean(diffs)
-    sd = statistics.pstdev(diffs) * math.sqrt(n/(n-1)) if n>1 else 0.0
+    sd = statistics.stdev(diffs) if n>1 else 0.0
     se = sd / math.sqrt(n)
     t = m / se if se>0 else float('inf')
     return t, m, sd
 
-def bootstrap_pvalue(diffs, n_boot=10000):
+def bootstrap_two_sided_pvalue(diffs, n_boot=10000):
+    # Two-sided bootstrap p-value testing mean==0 using centering
     if not diffs:
         return None
     obs = statistics.mean(diffs)
     n = len(diffs)
+    centered = [d - obs for d in diffs]
     count = 0
     for _ in range(n_boot):
-        sample = [random.choice(diffs) for _ in range(n)]
-        if (statistics.mean(sample) >= obs):
+        sample = [random.choice(centered) for _ in range(n)]
+        if abs(statistics.mean(sample)) >= abs(obs):
             count += 1
     p = (count+1)/(n_boot+1)
     return p
+
+def bootstrap_mean_ci(diffs, n_boot=10000, alpha=0.05):
+    if not diffs:
+        return None
+    means = []
+    n = len(diffs)
+    for _ in range(n_boot):
+        sample = [random.choice(diffs) for _ in range(n)]
+        means.append(statistics.mean(sample))
+    means.sort()
+    lo = means[int((alpha/2)*n_boot)]
+    hi = means[int((1-alpha/2)*n_boot)]
+    return statistics.mean(diffs), lo, hi
 
 def summarize(pairs, diffs):
     n = len(diffs)
@@ -91,19 +104,20 @@ def summarize(pairs, diffs):
     if n==0:
         out.append('No paired data found')
         return '\n'.join(out)
-    mean, lo, hi = mean_ci_bootstrap(diffs)
+    mean, lo, hi = bootstrap_mean_ci(diffs)
     tstat = paired_t_stat(diffs)
-    bp = bootstrap_pvalue(diffs)
+    bp_two = bootstrap_two_sided_pvalue(diffs)
     out.append(f"mean_diff_mb={mean:.4f}")
     out.append(f"95%CI_bootstrap_mb=[{lo:.4f}, {hi:.4f}]")
-    out.append(f"bootstrap_p_ge_obs={bp:.4f} (one-sided p>=) ")
+    out.append(f"bootstrap_p_two_sided={bp_two:.6f}")
     if tstat:
         t, m, sd = tstat
-        out.append(f"t_stat={t:.4f} mean={m:.4f} sd={sd:.4f}")
+        # approximate two-sided p-value using normal approximation
+        phi = 0.5*(1.0 + math.erf(abs(t)/math.sqrt(2.0)))
+        p_t = 2.0*(1.0 - phi)
+        out.append(f"t_stat={t:.4f} mean={m:.4f} sd={sd:.4f} t_two_sided_p_approx={p_t:.6e}")
     # percent differences
-    pct = [ (d / n * 100.0) if n!=0 else 0.0 for (n,d) in [(p[0], p[1]-p[0]) for p in pairs]]
-    # compute mean percent
-    pct_vals = [ (p[1]-p[0])/p[0]*100.0 for p in pairs if p[0]!=0]
+    pct_vals = [ (d - n)/n*100.0 for (it,n,d) in pairs if n!=0]
     if pct_vals:
         out.append(f"mean_diff_percent={statistics.mean(pct_vals):.3f}")
     return '\n'.join(out)
@@ -113,11 +127,28 @@ def main():
         print('Usage: analyze_results.py case1_simple_results.txt')
         sys.exit(2)
     rows = read_results(sys.argv[1])
-    pairs, diffs = paired_stats(rows)
-    report = summarize(pairs, diffs)
+    triplets, diffs = paired_stats(rows)
+    report = summarize(triplets, diffs)
+
+    # write report
     with open('analysis_report.txt','w') as f:
         f.write(report + '\n')
     print(report)
+
+    # write differences table and CSV for inspection
+    with open('differences_table.txt','w') as f:
+        f.write('iter,native_pss_mb,docker_pss_mb,diff_mb,diff_percent\n')
+        for it, n, d in triplets:
+            diff = d - n
+            pct = (diff / n * 100.0) if n != 0 else 0.0
+            f.write(f"{it},{n:.4f},{d:.4f},{diff:.4f},{pct:.4f}\n")
+
+    with open('diffs.csv','w') as f:
+        f.write('iter,native_pss_mb,docker_pss_mb,diff_mb,diff_percent\n')
+        for it, n, d in triplets:
+            diff = d - n
+            pct = (diff / n * 100.0) if n != 0 else 0.0
+            f.write(f"{it},{n:.4f},{d:.4f},{diff:.4f},{pct:.4f}\n")
 
 if __name__ == '__main__':
     main()
