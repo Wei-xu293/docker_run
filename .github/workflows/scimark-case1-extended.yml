@@ -175,7 +175,7 @@ jobs:
         run: |
           ./bench_case1.sh ${INPUT_ITERATIONS} ${INPUT_WARMUP} ${INPUT_SLEEP} "${INPUT_IMAGE}"
 
-        - name: Create analysis script (analyze_case1.py)
+      - name: Create analysis script (analyze_case1.py)
         run: |
           cat > analyze_case1.py <<'PY'
           import pandas as pd
