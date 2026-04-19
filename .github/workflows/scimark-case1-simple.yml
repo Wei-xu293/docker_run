@@ -67,7 +67,8 @@ jobs:
 
             # Docker (add SYS_PTRACE to allow reading smaps inside container)
             cname="idle_${i}_$$"
-            docker run -d --cap-add SYS_PTRACE --name "$cname" -v $PWD:/app -w /app "$IMAGE" java Idle >/dev/null
+            # run privileged so the workflow can read /proc/<pid>/smaps inside container
+            docker run -d --privileged --name "$cname" -v $PWD:/app -w /app "$IMAGE" java Idle >/dev/null
             sleep $SLEEP
             docker_raw=$(docker stats --no-stream --format "{{.MemUsage}}" "$cname" 2>/dev/null || echo "")
             token=$(echo "$docker_raw" | awk '{print $1}')
