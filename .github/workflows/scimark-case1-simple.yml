@@ -63,7 +63,8 @@ jobs:
             pss_native=$(pss_from_smaps $PID)
             kill $PID 2>/dev/null || true
             wait $PID 2>/dev/null || true
-            echo "native,$i,$(date +%s),${rss_kb},${pss_native},,,0" >> $OUT
+            # Emit full 12-column CSV line: leave docker-related fields empty for native rows
+            echo "native,$i,$(date +%s),${rss_kb},${pss_native},,,,,,0" >> $OUT
 
             # Docker: start container detached with a name so we can inspect host PID/smaps
             cname="idle_${i}_$$"
@@ -84,6 +85,19 @@ jobs:
               docker_host_pss_mb=$(awk '/Pss:/ {s+=$2} END {printf("%.2f", s/1024)}' /proc/$host_pid/smaps 2>/dev/null || echo "0.00")
               docker_rss_kb=$docker_host_rss_kb
               docker_pss_mb=$docker_host_pss_mb
+            fi
+
+            # If PSS is 0.00, capture debug info to help diagnose permission/availability
+            if [ "${docker_pss_mb}" = "0.00" ] || [ "${docker_host_pss_mb}" = "0.00" ]; then
+              mkdir -p debug_logs
+              docker top "$cname" -eo pid,cmd > debug_logs/${cname}_top.txt 2>&1 || true
+              docker inspect "$cname" > debug_logs/${cname}_inspect.json 2>&1 || true
+              if [ -n "$host_pid" ]; then
+                cp /proc/$host_pid/status debug_logs/${cname}_host_status.txt 2>/dev/null || true
+                head -n 200 /proc/$host_pid/smaps > debug_logs/${cname}_host_smaps_head.txt 2>/dev/null || true
+              else
+                echo "host_pid empty; cannot read /proc/<hostpid>/smaps" > debug_logs/${cname}_host_smaps_head.txt || true
+              fi
             fi
 
             # Get docker memory usage for the container
@@ -109,4 +123,6 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: case1-simple-results
-          path: case1_simple_results.txt
+          path: |
+            case1_simple_results.txt
+            debug_logs/**
