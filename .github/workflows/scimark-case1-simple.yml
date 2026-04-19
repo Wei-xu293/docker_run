@@ -120,6 +120,15 @@ jobs:
         run: |
           python3 scripts/analyze_results.py case1_simple_results.txt || true
 
+      - name: Install plotting deps
+        run: |
+          python3 -m pip install --upgrade pip
+          python3 -m pip install matplotlib
+
+      - name: Plot results
+        run: |
+          python3 scripts/plot_results.py diffs.csv || true
+
       - name: Upload results
         uses: actions/upload-artifact@v7
         with:
@@ -128,3 +137,6 @@ jobs:
             case1_simple_results.txt
             debug_logs/**
             analysis_report.txt
+            diffs.csv
+            differences_table.txt
+            plots/**
