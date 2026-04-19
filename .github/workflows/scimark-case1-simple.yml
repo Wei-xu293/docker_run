@@ -6,7 +6,7 @@ on:
       iterations:
         description: 'Número de ejecuciones medidas por escenario'
         required: false
-        default: '5'
+        default: '30'
       sleep:
         description: 'Segundos de espera antes de medir'
         required: false
@@ -121,6 +121,10 @@ jobs:
 
           echo "Results saved to $OUT"
 
+      - name: Analyze results
+        run: |
+          python3 scripts/analyze_results.py case1_simple_results.txt || true
+
       - name: Upload results
         uses: actions/upload-artifact@v7
         with:
@@ -128,3 +132,4 @@ jobs:
           path: |
             case1_simple_results.txt
             debug_logs/**
+            analysis_report.txt
