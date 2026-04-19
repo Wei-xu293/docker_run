@@ -79,10 +79,10 @@ jobs:
             sleep ${SLEEP}
 
             # Attempt to find the host PID for the java process inside the container
-            host_pid=$(docker top "$cname" -eo pid,cmd 2>/dev/null | awk '/java/ {print $1; exit}' || true)
+            host_pid=$(docker top "$cname" -eo pid,cmd 2>/dev/null | awk '$2=="java" {p=$1} END{print p}' || true)
             if [ -n "$host_pid" ]; then
               docker_host_rss_kb=$(grep -i VmRSS /proc/$host_pid/status 2>/dev/null | awk '{print $2}' || echo 0)
-              docker_host_pss_mb=$(awk '/Pss:/ {s+=$2} END {printf("%.2f", s/1024)}' /proc/$host_pid/smaps 2>/dev/null || echo "0.00")
+              docker_host_pss_mb=$(sudo awk '/Pss:/ {s+=$2} END {printf("%.2f", s/1024)}' /proc/$host_pid/smaps 2>/dev/null || echo "0.00")
               docker_rss_kb=$docker_host_rss_kb
               docker_pss_mb=$docker_host_pss_mb
             fi
@@ -93,8 +93,10 @@ jobs:
               docker top "$cname" -eo pid,cmd > debug_logs/${cname}_top.txt 2>&1 || true
               docker inspect "$cname" > debug_logs/${cname}_inspect.json 2>&1 || true
               if [ -n "$host_pid" ]; then
-                cp /proc/$host_pid/status debug_logs/${cname}_host_status.txt 2>/dev/null || true
-                head -n 200 /proc/$host_pid/smaps > debug_logs/${cname}_host_smaps_head.txt 2>/dev/null || true
+                sudo cp /proc/$host_pid/status debug_logs/${cname}_host_status.txt 2>/dev/null || true
+                sudo head -n 200 /proc/$host_pid/smaps > debug_logs/${cname}_host_smaps_head.txt 2>/dev/null || true
+                # also try smaps_rollup (aggregated) as an alternative
+                sudo cat /proc/$host_pid/smaps_rollup 2>/dev/null > debug_logs/${cname}_host_smaps_rollup.txt || true
               else
                 echo "host_pid empty; cannot read /proc/<hostpid>/smaps" > debug_logs/${cname}_host_smaps_head.txt || true
               fi
