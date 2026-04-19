@@ -35,146 +35,56 @@ jobs:
           cd scimark
           mvn clean package
 
-      # ---------- Helper: create a minimal idle Java program ----------
-      - name: Create idle Java program for base overhead
-        run: |
-          cat > Idle.java << 'EOF'
-          public class Idle {
-              public static void main(String[] args) throws InterruptedException {
-                  Thread.sleep(10000);  // idle for 10 seconds
-              }
-          }
-          EOF
-          javac Idle.java
-
-      # ========== CASE 1: Base overhead (idle) ==========
-      - name: Case 1 - Base overhead (idle)
-        run: |
-          echo "=== Case 1: Idle process overhead ==="
-          # Native idle
-          java Idle &
-          PID=$!
-          sleep 2
-          rss_native=$(cat /proc/$PID/status | grep VmRSS | awk '{print $2}')
-          kill $PID
-          echo "Native idle RSS: ${rss_native} KB ($((rss_native / 1024)) MB)"
-          
-          # Docker idle
-          docker run -d --name idle_container -v $PWD:/app -w /app eclipse-temurin:11-jdk-ubi9-minimal java Idle
-          sleep 2
-          # Parse stats (handles MiB, falls back to 0)
-          rss_docker_raw=$(docker stats --no-stream --format "{{.MemUsage}}" idle_container | awk '{print $1}')
-          rss_docker=$(echo $rss_docker_raw | sed 's/MiB//' | sed 's/GiB/*1024/' | bc)
-          docker rm -f idle_container
-          echo "Docker idle RSS: ${rss_docker} MB"
-          overhead=$(echo "$rss_docker - ($rss_native / 1024)" | bc)
-          echo "Idle overhead: ${overhead} MB"
-          echo "CASE1: idle_native_kb=$rss_native, idle_docker_mb=$rss_docker, overhead_mb=$overhead" >> results.txt
-
-      # ========== CASE 2: Memory-intensive (large datasets) ==========
-      - name: Case 2 - Memory-intensive (SciMark2 -large)
+      # ========== CASE 4: Horizontal scaling (REFIXED) ==========
+      - name: Case 4 - Horizontal scaling (3 instances)
         run: |
           cd scimark
-          echo "=== Case 2: SciMark2 -large performance and memory ==="
-          
-          # Native (Capturing Peak RSS)
-          /usr/bin/time -v java -jar target/scimark-2.3-SNAPSHOT.jar -large > native_large.txt 2>&1
-          native_score=$(grep "Composite Score" native_large.txt | awk '{print $3}')
-          native_mem=$(grep "Maximum resident set size" native_large.txt | awk '{print $6}')
-          echo "Native -large: Composite Score = $native_score, Peak RSS = $((native_mem / 1024)) MB"
-          
-          # Docker (Tracking peak memory via polling loop)
-          > docker_stats.txt
-          docker run -d --name scimark_large -v $PWD:/app -w /app eclipse-temurin:11-jdk-ubi9-minimal java -jar /app/target/scimark-2.3-SNAPSHOT.jar -large
-          
-          # Poll memory usage while the container is running
-          while docker inspect -f '{{.State.Running}}' scimark_large 2>/dev/null | grep -q "true"; do
-            docker stats --no-stream --format "{{.MemUsage}}" scimark_large >> docker_stats.txt || true
-            sleep 0.5
-          done
-          
-          docker logs scimark_large > docker_large_output.txt
-          docker rm scimark_large
-          
-          # Robust Python script to find peak memory from collected stats, accounting for GiB/MiB/KiB units
-          python3 -c "
-          import sys
-          max_mb = 0.0
-          for line in sys.stdin:
-              val_str = line.split()[0] if line.strip() else ''
-              if 'GiB' in val_str: val = float(val_str.replace('GiB','')) * 1024
-              elif 'MiB' in val_str: val = float(val_str.replace('MiB',''))
-              elif 'KiB' in val_str: val = float(val_str.replace('KiB','')) / 1024
-              elif 'B' in val_str: val = float(val_str.replace('B','')) / (1024*1024)
-              else: continue
-              if val > max_mb: max_mb = val
-          print(int(max_mb))
-          " < docker_stats.txt > peak_docker_mem.txt
-          
-          docker_mem_peak=$(cat peak_docker_mem.txt)
-          docker_score=$(grep "Composite Score" docker_large_output.txt | awk '{print $3}')
-          echo "Docker -large: Composite Score = $docker_score, Peak RSS = $docker_mem_peak MB"
-          
-          echo "CASE2: native_score=$native_score, native_mem_mb=$((native_mem / 1024)), docker_score=$docker_score, docker_mem_mb=$docker_mem_peak" >> ../results.txt
+          echo "=== Case 4: Measuring Peak Memory Usage ==="
 
-      # ========== CASE 3: Memory limits and OOM Killer ==========
-      - name: Case 3 - Memory limits (OOM test)
-        run: |
-          cd scimark
-          echo "=== Case 3: OOM Killer with --memory=80m (large dataset) ==="
-          set +e  # allow failure
-          docker run --rm --memory=80m --memory-swap=80m -v $PWD:/app -w /app eclipse-temurin:11-jdk-ubi9-minimal java -Xmx200m -jar /app/target/scimark-2.3-SNAPSHOT.jar -large
-          exit_code=$?
-          set -e
-          if [ $exit_code -eq 137 ]; then
-            echo "OOM killed as expected (exit code 137)"
-            echo "CASE3: OOM occurred with --memory=80m" >> ../results.txt
-          else
-            echo "Unexpected exit code: $exit_code"
-            echo "CASE3: No OOM (exit $exit_code)" >> ../results.txt
-          fi
-
-      # ========== CASE 4: Horizontal scaling (multiple instances) ==========
-      - name: Case 4 - Horizontal scaling (3 instances of default SciMark2)
-        run: |
-          cd scimark
-          echo "=== Case 4: 3 parallel instances ==="
-          
-          # Native instances
-          pids=()
+          # 1. NATIVE PEAK MEASUREMENT
+          echo "Running 3 native instances..."
+          native_peaks=()
           for i in {1..3}; do
-            java -jar target/scimark-2.3-SNAPSHOT.jar > native_$i.out 2>&1 &
+            # Usamos /usr/bin/time -v para capturar el 'Maximum resident set size'
+            /usr/bin/time -v java -jar target/scimark-2.3-SNAPSHOT.jar > native_$i.log 2>&1 &
             pids+=($!)
           done
-          sleep 5
-          total_native_kb=0
-          for pid in ${pids[@]}; do
-            rss_kb=$(cat /proc/$pid/status 2>/dev/null | grep VmRSS | awk '{print $2}')
-            if [ -n "$rss_kb" ]; then
-              total_native_kb=$((total_native_kb + rss_kb))
-            fi
-          done
-          echo "Native 3 instances total RSS: $((total_native_kb / 1024)) MB"
-          kill ${pids[@]} 2>/dev/null || true
           
-          # Docker instances
-          ids=()
+          wait ${pids[@]} # Esperamos a que todos terminen para tener el dato final
+
+          total_native_mb=0
           for i in {1..3}; do
-            id=$(docker run -d -v $PWD:/app -w /app eclipse-temurin:11-jdk-ubi9-minimal java -jar /app/target/scimark-2.3-SNAPSHOT.jar)
-            ids+=($id)
+            # Extraemos el valor en KB y lo pasamos a MB
+            peak_kb=$(grep "Maximum resident set size" native_$i.log | awk '{print $6}')
+            peak_mb=$(echo "scale=2; $peak_kb / 1024" | bc)
+            total_native_mb=$(echo "$total_native_mb + $peak_mb" | bc)
           done
-          sleep 5
+          echo "Native 3 instances total peak: $total_native_mb MB"
+
+          # 2. DOCKER PEAK MEASUREMENT
+          echo "Running 3 docker instances..."
           total_docker_mb=0
-          for id in ${ids[@]}; do
-            mem=$(docker stats --no-stream --format "{{.MemUsage}}" $id | awk '{print $1}' | sed 's/MiB//' | sed 's/GiB/*1024/' | bc)
-            total_docker_mb=$(echo "$total_docker_mb + $mem" | bc)
+          for i in {1..3}; do
+            # Ejecutamos time -v DENTRO del contenedor
+            # Usamos 'debian' o 'ubi-minimal' que incluyan /usr/bin/time
+            docker run --name scimark_$i -v $PWD:/app -w /app eclipse-temurin:11-jdk-ubi9-minimal \
+              /usr/bin/time -v java -jar /app/target/scimark-2.3-SNAPSHOT.jar > docker_$i.log 2>&1
           done
-          echo "Docker 3 instances total memory: $total_docker_mb MB"
-          docker rm -f ${ids[@]} 2>/dev/null || true
+
+          for i in {1..3}; do
+            peak_kb=$(grep "Maximum resident set size" docker_$i.log | awk '{print $6}')
+            peak_mb=$(echo "scale=2; $peak_kb / 1024" | bc)
+            total_docker_mb=$(echo "$total_docker_mb + $peak_mb" | bc)
+            docker rm scimark_$i > /dev/null
+          done
+          echo "Docker 3 instances total peak: $total_docker_mb MB"
+
+          # 3. CALCULATION
+          overhead=$(echo "$total_docker_mb - $total_native_mb" | bc)
+          echo "Horizontal scaling REAL overhead: $overhead MB"
           
-          overhead=$(echo "$total_docker_mb - ($total_native_kb / 1024)" | bc)
-          echo "Horizontal scaling overhead: $overhead MB"
-          echo "CASE4: native_3_total_mb=$((total_native_kb / 1024)), docker_3_total_mb=$total_docker_mb, overhead_mb=$overhead" >> ../results.txt
+          # Guardar resultados
+          echo "CASE4: native_3_total_mb=$total_native_mb, docker_3_total_mb=$total_docker_mb, overhead_mb=$overhead" >> ../results.txt
 
       # ---------- Upload all results ----------
       - name: Upload experiment results
@@ -183,7 +93,3 @@ jobs:
           name: scimark-results
           path: |
             results.txt
-            scimark/native_large.txt
-            scimark/docker_large_output.txt
-            scimark/docker_stats.txt
-            scimark/native_*.out
