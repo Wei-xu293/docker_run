@@ -47,7 +47,7 @@ jobs:
           SLEEP=${SLEEP:-2}
           IMAGE=${IMAGE:-eclipse-temurin:11-jdk-ubi9-minimal}
           OUT=case1_simple_results.txt
-          echo "scenario,iter,timestamp,rss_kb,pss_mb,docker_pss_mb,docker_mem_mb,docker_mem_raw,exit_code" > $OUT
+          echo "scenario,iter,timestamp,rss_kb,pss_mb,docker_rss_kb,docker_pss_mb,docker_mem_mb,docker_mem_raw,exit_code" > $OUT
 
           pss_from_smaps() {
             PID=$1
@@ -80,22 +80,26 @@ jobs:
               docker_mb=$(awk "BEGIN{print $(echo $token | sed 's/KiB//')/1024}")
             fi
 
-            # find java PID inside container and read its smaps for PSS
-            docker_pss_mb=$(docker exec "$cname" sh -c '
+            # find java PID inside container and read its VmRSS and smaps for PSS
+            docker_read=$(docker exec "$cname" sh -c '
               pid=$(pgrep -f java 2>/dev/null || true)
               if [ -z "$pid" ]; then
                 pid=$(ps -eo pid,cmd 2>/dev/null | awk "/java/ {print \$1; exit}")
               fi
               if [ -n "$pid" ]; then
-                awk "/Pss:/ {s+= \$2} END {printf(\"%.2f\", s/1024)}" /proc/$pid/smaps 2>/dev/null || echo "0.00"
+                rss=$(grep -i VmRSS /proc/$pid/status 2>/dev/null | awk "{print \$2}" || echo 0)
+                pss=$(awk "/Pss:/ {s+= \$2} END {printf(\"%.2f\", s/1024)}" /proc/$pid/smaps 2>/dev/null || echo "0.00")
+                printf "%s %s" "$rss" "$pss"
               else
-                echo "0.00"
+                echo "0 0.00"
               fi
-            ' ) || docker_pss_mb="0.00"
+            ' ) || docker_read="0 0.00"
+            docker_rss_kb=$(echo "$docker_read" | awk '{print $1}')
+            docker_pss_mb=$(echo "$docker_read" | awk '{print $2}')
 
             exit_code=0
             docker rm -f "$cname" >/dev/null 2>&1 || exit_code=$?
-            echo "docker,$i,$(date +%s),, ,${docker_pss_mb},${docker_mb},\"${docker_raw}\",${exit_code}" >> $OUT
+            echo "docker,$i,$(date +%s),, ,${docker_rss_kb},${docker_pss_mb},${docker_mb},\"${docker_raw}\",${exit_code}" >> $OUT
           done
 
           echo "Results saved to $OUT"
