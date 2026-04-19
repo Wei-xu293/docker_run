@@ -65,10 +65,8 @@ jobs:
             wait $PID 2>/dev/null || true
             echo "native,$i,$(date +%s),${rss_kb},${pss_native},,,0" >> $OUT
 
-            # Docker (add SYS_PTRACE to allow reading smaps inside container)
+            # Docker: start container detached with a name so we can inspect host PID/smaps
             cname="idle_${i}_$$"
-            # run privileged so the workflow can read /proc/<pid>/smaps inside container
-            # Docker: run helper inside container that starts Java, waits, then prints VmRSS and PSS to stdout
             docker_raw=""
             docker_mb=0
             docker_rss_kb=0
@@ -76,17 +74,19 @@ jobs:
             docker_host_rss_kb=0
             docker_host_pss_mb="0.00"
 
-            helper_output=$(docker run --rm --privileged -v $PWD:/app -w /app "$IMAGE" sh -c '
-              java Idle & pid=$!;
-              sleep '${SLEEP}';
-              rss=$(grep -i VmRSS /proc/$pid/status 2>/dev/null | awk "{print \$2}" || echo 0);
-              pss=$(awk "/Pss:/ {s+= \$2} END {printf(\"%.2f\", s/1024)}" /proc/$pid/smaps 2>/dev/null || echo "0.00");
-              printf "%s %s" "$rss" "$pss";
-            ')
-            docker_rss_kb=$(echo "$helper_output" | awk '{print $1}') || true
-            docker_pss_mb=$(echo "$helper_output" | awk '{print $2}') || true
+            docker run -d --privileged --name "$cname" -v $PWD:/app -w /app "$IMAGE" sh -c 'java Idle & sleep 600' >/dev/null
+            sleep ${SLEEP}
 
-            # Get docker memory usage
+            # Attempt to find the host PID for the java process inside the container
+            host_pid=$(docker top "$cname" -eo pid,cmd 2>/dev/null | awk '/java/ {print $1; exit}' || true)
+            if [ -n "$host_pid" ]; then
+              docker_host_rss_kb=$(grep -i VmRSS /proc/$host_pid/status 2>/dev/null | awk '{print $2}' || echo 0)
+              docker_host_pss_mb=$(awk '/Pss:/ {s+=$2} END {printf("%.2f", s/1024)}' /proc/$host_pid/smaps 2>/dev/null || echo "0.00")
+              docker_rss_kb=$docker_host_rss_kb
+              docker_pss_mb=$docker_host_pss_mb
+            fi
+
+            # Get docker memory usage for the container
             docker_raw=$(docker stats --no-stream --format "{{.MemUsage}}" "$cname" 2>/dev/null || echo "")
             token=$(echo "$docker_raw" | awk '{print $1}')
             if echo "$token" | grep -q GiB; then
@@ -97,9 +97,10 @@ jobs:
               docker_mb=$(awk "BEGIN{print $(echo $token | sed 's/KiB//')/1024}")
             fi
 
+            # Stop and remove the container now that we've captured host-side metrics
             exit_code=0
             docker rm -f "$cname" >/dev/null 2>&1 || exit_code=$?
-            echo "docker,$i,$(date +%s),,${pss_native},${docker_rss_kb},${docker_pss_mb},${docker_host_rss_kb},${docker_host_pss_mb},${docker_mb},\"${docker_raw}\",${exit_code}" >> $OUT
+            echo "docker,$i,$(date +%s),,,${docker_rss_kb},${docker_pss_mb},${docker_host_rss_kb},${docker_host_pss_mb},${docker_mb},\"${docker_raw}\",${exit_code}" >> $OUT
           done
 
           echo "Results saved to $OUT"
